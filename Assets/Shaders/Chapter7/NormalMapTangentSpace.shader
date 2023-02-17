@@ -17,7 +17,7 @@ Shader "Unity Shaders Book/Chapter 7/Normal Map In Tangent Space"{
             CGPROGRAM
 
             #pragma vertex vert
-            #pragma fragment fragment
+            #pragma fragment frag
 
             #include "Lighting.cginc"
 
@@ -68,11 +68,46 @@ Shader "Unity Shaders Book/Chapter 7/Normal Map In Tangent Space"{
                 // 如果我们想要把向量从空间 A 变换到空间 B，则需要得到空间 A 的三个基向量在空间 B 下的表示，并把这三个基向量依次按列摆放，再与需要进行变换的列向量相乘即可。
                 // 切线空间的三个基向量在世界空间下的表示，并把它们按列摆放，得到的矩阵是切线空间到世界空间的变换矩阵
                 // 其转置是世界空间到切线空间的变换矩阵（因为三个向量正交，正交矩阵的逆等于其转置）
+                // float3x3(a,b,c)按照行来填充的
                 float3x3 worldToTangent = float3x3(worldTangent, worldBinormal, worldNormal);
+
+                // 把世界空间的光照方向和视线方向转换到切线空间
+                o.lightDir = mul(worldToTangent, WorldSpaceLightDir(v.vertex));
+                o.viewDir = mul(worldToTangent, WorldSpaceViewDir(v.vertex));
                 return o;
             }
+            fixed4 frag(v2f i) : SV_Target {
+                //采样得到切线空间的光照方向和视线方向 
+                fixed3 tangentLightDir = normalize(i.lightDir);
+                fixed3 tangentViewDir = normalize(i.viewDir);
+                
+                // 采样法线纹理，得到的是法线经过映射后的像素值，需要反映射回来
+                fixed4 packedNormal = tex2D(_BumpMap, i.uv.zw);
 
+                fixed3 tangentNormal;
+                // 如果在Unity里没有把法线纹理类型设置为"Normal map"，需要在代码中计算tangentNormal
+                //tangentNormal.xy = (packedNormal.xy * 2 - 1) * _BumpScale;
+                //tangentNormal.z = sqrt(1.0 - saturate(dot(tangentNormal.xy, tangentNormal.xy)));
+                
+                // 如果在Unity里把法线纹理类型设置为"Normal map"，直接使用内置函数即可。Unity会根据平台选择不同的纹理压缩方法，就不能使用上面的手动计算tangentNormal了，见7.2.4节
+                tangentNormal = UnpackNormal(packedNormal);
+                tangentNormal.xy *= _BumpScale;
+                // 由于法线是单位矢量，且切线空间z都为正
+                tangentNormal.z = sqrt(1.0 - saturate(dot(tangentNormal.xy, tangentNormal.xy)));
+                
+                fixed3 albedo = tex2D(_MainTex, i.uv).rgb * _Color.rgb;
+                
+                fixed3 ambient = UNITY_LIGHTMODEL_AMBIENT.xyz * albedo;
+                
+                fixed3 diffuse = _LightColor0.rgb * albedo * max(0, dot(tangentNormal, tangentLightDir));
+
+                fixed3 halfDir = normalize(tangentLightDir + tangentViewDir);
+                fixed3 specular = _LightColor0.rgb * _Specular.rgb * pow(max(0, dot(tangentNormal, halfDir)), _Gloss);
+                
+                return fixed4(ambient + diffuse + specular, 1.0);
+            }
             ENDCG
         }
     }
+    FallBack "Specular"
 }
